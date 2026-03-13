@@ -1,8 +1,61 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { PublicClientApplication } from "@azure/msal-browser";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, Area, AreaChart, ComposedChart, Line,
 } from "recharts";
+
+/* ═══════════════════════════════════════════════════════════════════
+   OneDrive / Microsoft Graph
+   ─ Paste your Azure App Registration Client ID below.
+   ─ The Client ID is not a secret for browser apps — it's safe in
+     a public repo. Security comes from the redirect URI restriction
+     you set in the Azure portal.
+   ═══════════════════════════════════════════════════════════════════ */
+const OD_CLIENT_ID = "98583d53-df69-46e2-a3dd-3dbcc81ea9b1";
+const OD_SCOPES = ["Files.Read"];
+
+const _msalCfg = {
+  auth: {
+    clientId: OD_CLIENT_ID,
+    authority: "https://login.microsoftonline.com/common",
+    redirectUri: window.location.origin + window.location.pathname.replace(/[^/]*$/, ""),
+  },
+  cache: { cacheLocation: "localStorage", storeAuthStateInCookie: false },
+};
+
+let _msal = null;
+async function getMsal() {
+  if (!_msal) {
+    _msal = new PublicClientApplication(_msalCfg);
+    await _msal.initialize();
+    await _msal.handleRedirectPromise();
+  }
+  return _msal;
+}
+
+async function fetchOneDriveFile(filePath) {
+  const msal = await getMsal();
+  const accounts = msal.getAllAccounts();
+  let accessToken;
+  try {
+    const req = { scopes: OD_SCOPES, account: accounts[0] };
+    const r = accounts.length
+      ? await msal.acquireTokenSilent(req)
+      : await msal.acquireTokenPopup({ scopes: OD_SCOPES });
+    accessToken = r.accessToken;
+  } catch {
+    const r = await msal.acquireTokenPopup({ scopes: OD_SCOPES });
+    accessToken = r.accessToken;
+  }
+  const encoded = filePath.replace(/^\//, "").split("/").map(encodeURIComponent).join("/");
+  const res = await fetch(
+    `https://graph.microsoft.com/v1.0/me/drive/root:/${encoded}:/content`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  if (!res.ok) throw new Error(`OneDrive ${res.status}: ${await res.text()}`);
+  return res.text();
+}
 
 /* ═══════════════════════════════════════════════════════════════════
    IndexedDB
@@ -291,6 +344,8 @@ export default function App() {
   const [editR, setEditR] = useState(null);
   const [ready, setReady] = useState(false);
   const fRef = useRef(null);
+  const [odPath, setOdPath] = useState(() => localStorage.getItem("od_path") || "");
+  const [odBusy, setOdBusy] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -354,6 +409,32 @@ export default function App() {
     if (!confirm("Delete ALL charging sessions? Cannot be undone.")) return;
     await dbClear(S_EV); setEvents([]);
   };
+
+  const onSyncOneDrive = useCallback(async () => {
+    if (OD_CLIENT_ID === "PASTE_YOUR_CLIENT_ID_HERE") {
+      setMsg({ ok: false, text: "Azure Client ID not configured yet — paste it into the code first (see setup guide)." });
+      return;
+    }
+    if (!odPath.trim()) {
+      setMsg({ ok: false, text: "Enter the OneDrive file path first." });
+      return;
+    }
+    setOdBusy(true); setMsg(null);
+    try {
+      const text = await fetchOneDriveFile(odPath.trim());
+      const { type, events: parsed } = parseCSV(text);
+      if (!parsed.length) throw new Error("No valid records found in OneDrive file");
+      const ex = new Set((await dbAll(S_EV)).map(e => e.uid));
+      let add = 0, skip = 0;
+      for (const ev of parsed) {
+        if (ex.has(ev.uid)) { skip++; continue; }
+        await dbPut(S_EV, ev); add++;
+      }
+      await reload();
+      setMsg({ ok: true, text: `OneDrive sync: ${add} new ${type === "events" ? "sessions" : "months"} imported, ${skip} duplicates skipped.` });
+    } catch (err) { setMsg({ ok: false, text: err.message }); }
+    setOdBusy(false);
+  }, [odPath]);
 
   // ── Aggregated data ──
   const monthly = useMemo(() => aggregate(events, rates), [events, rates]);
@@ -629,6 +710,29 @@ export default function App() {
                 Mês;kWh Vazio;kWh Cheias;kWh Ponta<br/>
                 2025-01;180.5;120.3;45.2
               </div>
+            </div>
+
+            <div className="cd" style={{ marginBottom: 14 }}>
+              <h3 style={{ fontWeight: 600, fontSize: 14, color: C.accent, marginBottom: 6 }}>☁️ Sync from OneDrive</h3>
+              <p style={{ fontSize: 13, color: C.txtD, marginBottom: 12, lineHeight: 1.6 }}>
+                Enter the path to your CSV inside OneDrive (relative to your OneDrive root). The app will sign you in with Microsoft, read the file, and import any new sessions — duplicates are skipped automatically.
+              </p>
+              <input
+                className="inp"
+                placeholder="e.g. EV-Tracker/charges.csv"
+                value={odPath}
+                onChange={e => { setOdPath(e.target.value); localStorage.setItem("od_path", e.target.value); }}
+                style={{ marginBottom: 10 }}
+              />
+              <button className="b bp" onClick={onSyncOneDrive} disabled={odBusy || !odPath.trim()}>
+                {odBusy ? "⏳ A sincronizar…" : "☁️ Sincronizar com OneDrive"}
+              </button>
+              {OD_CLIENT_ID === "PASTE_YOUR_CLIENT_ID_HERE" && (
+                <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, fontSize: 12,
+                  background: `${C.cheias}15`, border: `1px solid ${C.cheias}40`, color: C.cheias }}>
+                  ⚠️ Azure Client ID not configured — follow the setup guide below and paste your ID into the code.
+                </div>
+              )}
             </div>
 
             <div className="cd" style={{ marginBottom: 14 }}>
