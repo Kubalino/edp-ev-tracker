@@ -253,13 +253,13 @@ function parseMo(val) {
    ═══════════════════════════════════════════════════════════════════ */
 const DEF_RATES = {
   id: "current",
-  ponta: 0.3250,
-  cheias: 0.1729,
-  vazio: 0.1045,
+  ponta: 0.2452,
+  cheias: 0.0412,
+  vazio: 0.0158,
   potenciaDia: 0.3819,
   iva: 0.06,
-  label: "EDP Eletricidade Verde Tri-Horária (6.9 kVA)",
-  lastUpdated: "2026-01-01",
+  label: "EDP Tri-Horária (10,35 kW)",
+  lastUpdated: "2025-12-22",
 };
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -302,23 +302,70 @@ function moLabel(m) {
   return `${n[+mo-1]} ${y}`;
 }
 
+function aggregateWeekly(events, rates) {
+  const wp = {};
+  events.forEach(ev => {
+    const d = new Date(ev.date);
+    const dow = d.getDay() === 0 ? 6 : d.getDay() - 1; // days since Monday
+    const mon = new Date(d); mon.setDate(d.getDate() - dow); mon.setHours(0,0,0,0);
+    const key = mon.toISOString().slice(0,10);
+    const label = `${String(mon.getDate()).padStart(2,"0")}/${String(mon.getMonth()+1).padStart(2,"0")}`;
+    if (!wp[key]) wp[key] = { key, label, vazio: 0, cheias: 0, ponta: 0, kwh: 0, sessions: 0 };
+    wp[key].vazio += ev.vazio; wp[key].cheias += ev.cheias; wp[key].ponta += ev.ponta;
+    wp[key].kwh += ev.kwh; wp[key].sessions++;
+  });
+  return Object.values(wp).sort((a,b) => a.key.localeCompare(b.key)).map(w => {
+    const energy = w.ponta*rates.ponta + w.cheias*rates.cheias + w.vazio*rates.vazio;
+    return { ...w, energy: +energy.toFixed(2), energyIva: +(energy*(1+rates.iva)).toFixed(2) };
+  });
+}
+
 /* ═══════════════════════════════════════════════════════════════════
-   Theme
+   Nord colour palette — https://www.nordtheme.com
+   Installed via: npm install nord  (CSS vars also loaded in main.jsx)
    ═══════════════════════════════════════════════════════════════════ */
-const C = {
-  bg: "#07090F", bg2: "#0C1017", card: "#111621", cardH: "#161D2E",
-  brd: "#1B2336", brdL: "#2A3654",
-  ponta: "#F87171", cheias: "#FCD34D", vazio: "#6EE7B7",
-  accent: "#A5B4FC", accentD: "#6366F1", accentBg: "#6366F116",
-  txt: "#E2E8F0", txtD: "#94A3B8", txtM: "#64748B",
-  ok: "#10B981", err: "#EF4444",
+const NORD = {
+  // Polar Night
+  n0:"#2E3440", n1:"#3B4252", n2:"#434C5E", n3:"#4C566A",
+  // Snow Storm
+  n4:"#D8DEE9", n5:"#E5E9F0", n6:"#ECEFF4",
+  // Frost
+  n7:"#8FBCBB", n8:"#88C0D0", n9:"#81A1C1", n10:"#5E81AC",
+  // Aurora
+  n11:"#BF616A", n12:"#D08770", n13:"#EBCB8B", n14:"#A3BE8C", n15:"#B48EAD",
 };
-const PC = { ponta: C.ponta, cheias: C.cheias, vazio: C.vazio };
+
+const THEMES = {
+  dark: {
+    bg:      NORD.n0,          // #2E3440  page background (Polar Night)
+    bg2:     "#2A3344",        // inner nested — Frost-tinted dark, distinct from both bg and card
+    card:    NORD.n1,          // #3B4252  outer cards — clearly raised from bg
+    cardH:   NORD.n2,          // #434C5E  hover
+    brd:    `${NORD.n8}35`,    // Frost blue border, semi-transparent
+    brdL:   `${NORD.n8}60`,    // Frost blue border, brighter on hover
+    ponta:   NORD.n11,         // #BF616A  Aurora red
+    cheias:  NORD.n13,         // #EBCB8B  Aurora yellow
+    vazio:   NORD.n14,         // #A3BE8C  Aurora green
+    accent:  NORD.n8,          // #88C0D0  Frost
+    accentD: NORD.n10,         // #5E81AC  Frost dark
+    accentBg:`${NORD.n8}22`,
+    txt:     NORD.n6,          // #ECEFF4  Snow Storm — primary text
+    txtD:    NORD.n4,          // #D8DEE9  Snow Storm — secondary text
+    txtM:    NORD.n9,          // #81A1C1  Frost — muted text (characteristic Nord tint)
+    ok:      NORD.n14,
+    err:     NORD.n11,
+  },
+  light: {
+    bg: NORD.n6, bg2: NORD.n5, card: "#FFFFFF", cardH: NORD.n4,
+    brd: NORD.n4, brdL: "#C3CCE0",
+    ponta: NORD.n11, cheias: "#A07000", vazio: "#4A7A38",
+    accent: NORD.n10, accentD: NORD.n9, accentBg: `${NORD.n10}18`,
+    txt: NORD.n0, txtD: NORD.n2, txtM: NORD.n3,
+    ok: "#4A7A38", err: NORD.n11,
+  },
+};
+
 const PL = { ponta: "Ponta", cheias: "Cheias", vazio: "Vazio" };
-const TT = {
-  contentStyle: { background: C.card, border: `1px solid ${C.brd}`, borderRadius: 12, fontFamily: "'Outfit',sans-serif", fontSize: 13, boxShadow: "0 12px 40px rgba(0,0,0,.5)" },
-  labelStyle: { color: C.txt, fontWeight: 600, marginBottom: 4 },
-};
 
 /* ═══════════════════════════════════════════════════════════════════
    Schedule Preview Data
@@ -346,6 +393,20 @@ export default function App() {
   const fRef = useRef(null);
   const [odPath, setOdPath] = useState(() => localStorage.getItem("od_path") || "");
   const [odBusy, setOdBusy] = useState(false);
+  const [odMsg, setOdMsg] = useState(null);
+  const [chartMode, setChartMode] = useState("monthly");
+  const [theme, setTheme] = useState(() => localStorage.getItem("edp_theme") || "dark");
+  const C = THEMES[theme];
+  const PC = { ponta: C.ponta, cheias: C.cheias, vazio: C.vazio };
+  const TT = {
+    contentStyle: { background: C.card, border: `1px solid ${C.brd}`, borderRadius: 12, fontFamily: "'Outfit',sans-serif", fontSize: 13, boxShadow: "0 12px 40px rgba(0,0,0,.5)" },
+    labelStyle: { color: C.txt, fontWeight: 600, marginBottom: 4 },
+  };
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    localStorage.setItem("edp_theme", next);
+  };
 
   useEffect(() => {
     (async () => {
@@ -412,14 +473,14 @@ export default function App() {
 
   const onSyncOneDrive = useCallback(async () => {
     if (OD_CLIENT_ID === "PASTE_YOUR_CLIENT_ID_HERE") {
-      setMsg({ ok: false, text: "Azure Client ID not configured yet — paste it into the code first (see setup guide)." });
+      setOdMsg({ ok: false, text: "Azure Client ID not configured yet — paste it into the code first (see setup guide)." });
       return;
     }
     if (!odPath.trim()) {
-      setMsg({ ok: false, text: "Enter the OneDrive file path first." });
+      setOdMsg({ ok: false, text: "Enter the OneDrive file path first." });
       return;
     }
-    setOdBusy(true); setMsg(null);
+    setOdBusy(true); setOdMsg(null);
     try {
       const text = await fetchOneDriveFile(odPath.trim());
       const { type, events: parsed } = parseCSV(text);
@@ -431,8 +492,8 @@ export default function App() {
         await dbPut(S_EV, ev); add++;
       }
       await reload();
-      setMsg({ ok: true, text: `OneDrive sync: ${add} new ${type === "events" ? "sessions" : "months"} imported, ${skip} duplicates skipped.` });
-    } catch (err) { setMsg({ ok: false, text: err.message }); }
+      setOdMsg({ ok: true, text: `OneDrive sync: ${add} new ${type === "events" ? "sessions" : "months"} imported, ${skip} duplicates skipped.` });
+    } catch (err) { setOdMsg({ ok: false, text: err.message }); }
     setOdBusy(false);
   }, [odPath]);
 
@@ -448,6 +509,8 @@ export default function App() {
     };
   }, [monthly, events]);
   const avgMo = monthly.length ? { cost: totals.cost/monthly.length, kwh: totals.kwh/monthly.length } : { cost: 0, kwh: 0 };
+  const weekly = useMemo(() => aggregateWeekly(events, rates), [events, rates]);
+  const chartData = chartMode === "monthly" ? monthly : weekly;
 
   if (!ready) return (
     <div style={{ background: C.bg, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -477,6 +540,8 @@ export default function App() {
         @keyframes su{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
         .su{animation:su .35s ease-out forwards}
         .recharts-tooltip-wrapper{outline:none!important}
+        @media(max-width:600px){main{padding:12px 10px!important}.chart-2col{grid-template-columns:1fr!important}}
+        @media(max-width:400px){.grid-periods{grid-template-columns:1fr!important;width:100%}}
         .tg{display:inline-block;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:600;letter-spacing:.3px}
         .inp{padding:9px 12px;border:1px solid ${C.brd};border-radius:9px;background:${C.bg2};color:${C.txt};font-family:'JetBrains Mono',monospace;font-size:14px;width:100%;outline:none;transition:border-color .15s}
         .inp:focus{border-color:${C.accent}}
@@ -485,12 +550,19 @@ export default function App() {
       {/* ═══ HEADER ═══ */}
       <header style={{ borderBottom: `1px solid ${C.brd}`, padding: "13px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 34, height: 34, borderRadius: 9, background: `linear-gradient(135deg, ${C.ponta}, ${C.cheias}, ${C.vazio})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🔌</div>
+          <div style={{ width: 34, height: 34, borderRadius: 9, background: `linear-gradient(135deg, ${NORD.n10}, ${NORD.n8})`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <i className="bx bxs-bolt" style={{ fontSize: 22, color: NORD.n6, lineHeight: 1 }}></i>
+          </div>
           <div>
             <div style={{ fontWeight: 700, fontSize: 17, letterSpacing: -.3 }}>EDP EV Charging Tracker</div>
             <div style={{ fontSize: 11, color: C.txtM, letterSpacing: .3 }}>Tri-Horária · Ciclo Diário · Portugal</div>
           </div>
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={toggleTheme} title={theme === "dark" ? "Switch to light" : "Switch to dark"}
+            style={{ width: 34, height: 34, borderRadius: 9, border: `1px solid ${C.brd}`, background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <i className={`bx ${theme === "dark" ? "bx-sun" : "bx-moon"}`} style={{ fontSize: 19, color: NORD.n9 }}></i>
+          </button>
         <nav style={{ display: "flex", gap: 3, background: C.bg2, padding: 3, borderRadius: 10, border: `1px solid ${C.brd}` }}>
           {[
             { id: "dashboard", icon: "📊", l: "Dashboard" },
@@ -501,6 +573,7 @@ export default function App() {
             <button key={t.id} className={`nb ${view===t.id?"on":""}`} onClick={() => setView(t.id)}>{t.icon} {t.l}</button>
           ))}
         </nav>
+        </div>
       </header>
 
       <main style={{ padding: "22px 24px", maxWidth: 1220, margin: "0 auto" }}>
@@ -509,7 +582,7 @@ export default function App() {
         {view === "dashboard" && (
           <div className="su">
             {!events.length ? (
-              <EmptyState onAction={() => setView("import")} />
+              <EmptyState onAction={() => setView("import")} C={C} />
             ) : (<>
               {/* KPIs */}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12, marginBottom: 20 }}>
@@ -531,9 +604,15 @@ export default function App() {
 
               {/* Monthly charging cost trend */}
               <div className="cd" style={{ marginBottom: 16 }}>
-                <h3 style={{ fontWeight: 600, fontSize: 15, marginBottom: 14 }}>Custo Mensal de Carregamento (€ c/ IVA)</h3>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                  <h3 style={{ fontWeight: 600, fontSize: 15 }}>Custo de Carregamento (€ c/ IVA)</h3>
+                  <div style={{ display: "flex", gap: 3, background: C.bg2, padding: 3, borderRadius: 8, border: `1px solid ${C.brd}` }}>
+                    <button className={`nb ${chartMode==="monthly"?"on":""}`} style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => setChartMode("monthly")}>Mensal</button>
+                    <button className={`nb ${chartMode==="weekly"?"on":""}`} style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => setChartMode("weekly")}>Semanal</button>
+                  </div>
+                </div>
                 <ResponsiveContainer width="100%" height={270}>
-                  <ComposedChart data={monthly} margin={{ top: 5, right: 8, left: -10, bottom: 5 }}>
+                  <ComposedChart data={chartData} margin={{ top: 5, right: 8, left: -10, bottom: 5 }}>
                     <defs>
                       <linearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor={C.accent} stopOpacity={.25} /><stop offset="100%" stopColor={C.accent} stopOpacity={0} />
@@ -550,7 +629,7 @@ export default function App() {
               </div>
 
               {/* Two-col: cost by period + kWh */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+              <div className="chart-2col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
                 <div className="cd">
                   <h3 style={{ fontWeight: 600, fontSize: 15, marginBottom: 14 }}>Custo por Período (€)</h3>
                   <ResponsiveContainer width="100%" height={250}>
@@ -598,7 +677,7 @@ export default function App() {
                     <span className="tg" style={{ background: C.accentBg, color: C.accent, marginLeft: 10 }}>{latest.sessions} sessões</span>
                     <span className="tg mo" style={{ background: `${C.vazio}18`, color: C.vazio, marginLeft: 6 }}>{latest.kwh.toFixed(1)} kWh</span>
                   </h3>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 14 }}>
+                  <div className="grid-periods" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 14 }}>
                     {["ponta","cheias","vazio"].map(p => {
                       const kwh = latest[p], cost = latest[`c${p.charAt(0).toUpperCase()}`];
                       const pct = latest.kwh > 0 ? kwh/latest.kwh*100 : 0;
@@ -619,7 +698,7 @@ export default function App() {
                       );
                     })}
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10 }}>
                     {[
                       { l: "Energia (s/ IVA)", v: `€${latest.energy.toFixed(2)}` },
                       { l: "IVA (6%)", v: `€${(latest.energyIva - latest.energy).toFixed(2)}` },
@@ -649,7 +728,7 @@ export default function App() {
               {events.length > 0 && <button className="b bs bd" onClick={onClearAll}>Apagar tudo</button>}
             </div>
             {!events.length ? (
-              <EmptyState onAction={() => setView("import")} />
+              <EmptyState onAction={() => setView("import")} C={C} />
             ) : (
               <div className="cd" style={{ padding: 0, overflow: "hidden" }}>
                 <div style={{ overflowX: "auto" }}>
@@ -694,7 +773,7 @@ export default function App() {
 
         {/* ═══════════════════ IMPORT ═══════════════════ */}
         {view === "import" && (
-          <div className="su" style={{ maxWidth: 640 }}>
+          <div className="su" style={{ maxWidth: 640, margin: "0 auto" }}>
             <h2 style={{ fontWeight: 700, fontSize: 20, marginBottom: 6 }}>Importar Dados</h2>
             <p style={{ color: C.txtD, fontSize: 14, marginBottom: 20, lineHeight: 1.6 }}>
               Carregue o CSV do seu carregador EV. O parser detecta o formato automaticamente e classifica cada sessão em Vazio/Cheias/Ponta com base nos horários oficiais EDP.
@@ -727,6 +806,13 @@ export default function App() {
               <button className="b bp" onClick={onSyncOneDrive} disabled={odBusy || !odPath.trim()}>
                 {odBusy ? "⏳ A sincronizar…" : "☁️ Sincronizar com OneDrive"}
               </button>
+              {odMsg && (
+                <div style={{ marginTop: 12, padding: "10px 16px", borderRadius: 10, fontSize: 13,
+                  background: odMsg.ok ? `${C.ok}12` : `${C.err}12`,
+                  border: `1px solid ${odMsg.ok ? C.ok : C.err}30`,
+                  color: odMsg.ok ? C.ok : C.err,
+                }}>{odMsg.text}</div>
+              )}
               {OD_CLIENT_ID === "PASTE_YOUR_CLIENT_ID_HERE" && (
                 <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, fontSize: 12,
                   background: `${C.cheias}15`, border: `1px solid ${C.cheias}40`, color: C.cheias }}>
@@ -765,7 +851,7 @@ export default function App() {
               <p style={{ fontSize: 12, color: C.txtD, marginBottom: 14, lineHeight: 1.6 }}>
                 Cada sessão é classificada automaticamente com base na hora, dia da semana e estação. Sessões que cruzam períodos são divididas proporcionalmente.
               </p>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 10 }}>
                 {[{ t: "Inverno (Nov–Mar) — Dias úteis", k: "wdW" }, { t: "Verão (Abr–Out) — Dias úteis", k: "wdS" }].map(s => (
                   <div key={s.k} style={{ background: C.bg2, borderRadius: 10, padding: 12, border: `1px solid ${C.brd}` }}>
                     <div style={{ fontSize: 11.5, fontWeight: 600, marginBottom: 8 }}>{s.t}</div>
@@ -798,10 +884,18 @@ export default function App() {
 
         {/* ═══════════════════ RATES ═══════════════════ */}
         {view === "rates" && (
-          <div className="su" style={{ maxWidth: 640 }}>
+          <div className="su" style={{ maxWidth: 640, margin: "0 auto" }}>
             <h2 style={{ fontWeight: 700, fontSize: 20, marginBottom: 6 }}>Tarifas EDP</h2>
-            <p style={{ color: C.txtD, fontSize: 14, marginBottom: 20 }}>
-              Valores pré-carregados com estimativas de 2026 para 6.9 kVA. Ajuste conforme o seu contrato.
+            <p style={{ color: C.txtD, fontSize: 14, marginBottom: 8, lineHeight: 1.6 }}>
+              Tarifas de acesso às redes (ERSE) para Tri-Horária — 10,35 kW. Ajuste conforme o seu contrato.
+            </p>
+            <p style={{ fontSize: 12, color: C.txtM, marginBottom: 20 }}>
+              Fonte:{" "}
+              <a href="https://helpcenter.edp.pt/media/hswmizya/20251222_tarifas_acesso_redes.pdf"
+                target="_blank" rel="noopener noreferrer"
+                style={{ color: C.accent, textDecoration: "none" }}>
+                EDP — Tarifas de Acesso às Redes (Dez 2025)
+              </a>
             </p>
 
             <div className="cd" style={{ marginBottom: 14 }}>
@@ -835,7 +929,7 @@ export default function App() {
                   </div>
                 </div>
               ) : (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10 }}>
                   {["ponta","cheias","vazio"].map(p => (
                     <div key={p} style={{ background: C.bg2, padding: 16, borderRadius: 12, border: `1px solid ${C.brd}`, textAlign: "center" }}>
                       <div style={{ width: 12, height: 12, borderRadius: 4, background: PC[p], margin: "0 auto 8px" }} />
@@ -849,7 +943,7 @@ export default function App() {
             </div>
 
             <div className="cd">
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
                 {[
                   { l: "Potência contratada (€/dia)", v: `€${rates.potenciaDia.toFixed(4)}` },
                   { l: "IVA", v: `${(rates.iva*100).toFixed(1)}%` },
@@ -877,7 +971,7 @@ export default function App() {
   );
 }
 
-function EmptyState({ onAction }) {
+function EmptyState({ onAction, C }) {
   return (
     <div style={{ textAlign: "center", padding: "80px 24px" }}>
       <div style={{ fontSize: 56, marginBottom: 16 }}>🔌</div>
