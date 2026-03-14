@@ -6,7 +6,8 @@ A browser-based dashboard to track EV charging costs using EDP's **tri-horária*
 
 ## Features
 
-- **CSV Import** — Upload charging session CSVs from your EV charger (wallbox, etc.)
+- **OneDrive Sync** — Reads your CSV directly from a OneDrive folder via Microsoft Graph API; sign in once with your Microsoft account and sync on demand
+- **CSV Import** — Upload charging session CSVs manually from your EV charger app
 - **Auto Period Classification** — Each session is split into Vazio/Cheias/Ponta based on EDP's official *ciclo diário* schedule, accounting for:
   - Time of day
   - Weekday vs weekend (no Ponta on weekends)
@@ -54,7 +55,25 @@ Both `,` and `;` separators are supported.
 | Cheias | 08:00–10:30, 13:00–19:30, 21:00–22:00 | 08:00–22:00 |
 | Ponta | 10:30–13:00, 19:30–21:00 | — |
 
-## Getting Started
+## Live App
+
+**https://Kubalino.github.io/edp-ev-tracker/**
+
+Deployed automatically via GitHub Actions on every push to `main`.
+
+## OneDrive Sync Setup
+
+The app can read your CSV directly from OneDrive. One-time setup required:
+
+1. Register a free app at [portal.azure.com](https://portal.azure.com) → App registrations
+2. Set account type to "Any Entra ID Tenant + Personal Microsoft accounts"
+3. Add redirect URIs (Single-page application): `http://localhost:5173/` and your GitHub Pages URL
+4. Add API permission: Microsoft Graph → Delegated → `Files.Read`
+5. Paste the Application (client) ID into `OD_CLIENT_ID` in `src/App.jsx`
+
+Then in the app: go to **Import tab** → enter your OneDrive file path (e.g. `EV-Tracker/charges.csv`) → click Sync.
+
+## Getting Started (local dev)
 
 ```bash
 # Install dependencies
@@ -72,7 +91,8 @@ npm run build
 - **React 18** + Vite
 - **Recharts** — Charts
 - **IndexedDB** — Local persistence (no server needed)
-- No external APIs, no accounts, fully offline-capable
+- **@azure/msal-browser** — Microsoft authentication for OneDrive sync
+- **GitHub Actions** — Automated deployment to GitHub Pages
 
 ## Pre-loaded Rates (2026 estimate)
 
@@ -87,7 +107,7 @@ npm run build
 
 ## Data Privacy
 
-All data is stored **locally in your browser** using IndexedDB. Nothing is sent to any server. Use the backup/restore feature to move data between devices.
+Charging data is stored **locally in your browser** using IndexedDB. The only external communication is the OneDrive sync feature, which reads your CSV directly from your own Microsoft account — no third-party servers involved. Use the backup/restore feature to move data between devices.
 
 ## License
 
