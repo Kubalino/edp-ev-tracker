@@ -253,12 +253,27 @@ function parseMo(val) {
    ═══════════════════════════════════════════════════════════════════ */
 const DEF_RATES = {
   id: "current",
+  tariffType: "tri-horaria",
   ponta: 0.2452,
   cheias: 0.0412,
   vazio: 0.0158,
+  simples: 0.228,
   potenciaDia: 0.3819,
-  iva: 0.06,
+  iva: 0.23,
   label: "EDP Tri-Horária (10,35 kW)",
+  lastUpdated: "2025-12-22",
+};
+
+const DEF_RATES_SIMPLES = {
+  id: "current",
+  tariffType: "simples",
+  ponta: 0.2452,
+  cheias: 0.0412,
+  vazio: 0.0158,
+  simples: 0.228,
+  potenciaDia: 0.5154,
+  iva: 0.23,
+  label: "EDP Tarifa Simples (10,35 kVA)",
   lastUpdated: "2025-12-22",
 };
 
@@ -276,13 +291,12 @@ function aggregate(events, rates) {
     mp[ev.month].totalDur += ev.durMin;
     mp[ev.month].sessions++;
   });
+  const isSimples = (rates.tariffType || "tri-horaria") === "simples";
   return Object.values(mp).sort((a, b) => a.month.localeCompare(b.month)).map(m => {
-    const cP = m.ponta * rates.ponta;
-    const cC = m.cheias * rates.cheias;
-    const cV = m.vazio * rates.vazio;
-    const energy = cP + cC + cV;
-    // Note: potência is a fixed daily cost on your bill regardless of EV charging
-    // For EV tracking we show just the energy cost; the full bill section adds potência
+    const cP = isSimples ? 0 : m.ponta * rates.ponta;
+    const cC = isSimples ? 0 : m.cheias * rates.cheias;
+    const cV = isSimples ? 0 : m.vazio * rates.vazio;
+    const energy = isSimples ? m.kwh * (rates.simples || 0.0607) : (cP + cC + cV);
     const energyIva = energy * (1 + rates.iva);
     return {
       ...m, label: moLabel(m.month),
@@ -315,7 +329,10 @@ function aggregateWeekly(events, rates) {
     wp[key].kwh += ev.kwh; wp[key].sessions++;
   });
   return Object.values(wp).sort((a,b) => a.key.localeCompare(b.key)).map(w => {
-    const energy = w.ponta*rates.ponta + w.cheias*rates.cheias + w.vazio*rates.vazio;
+    const isSimples = (rates.tariffType || "tri-horaria") === "simples";
+    const energy = isSimples
+      ? w.kwh * (rates.simples || 0.0607)
+      : w.ponta*rates.ponta + w.cheias*rates.cheias + w.vazio*rates.vazio;
     return { ...w, energy: +energy.toFixed(2), energyIva: +(energy*(1+rates.iva)).toFixed(2) };
   });
 }
@@ -395,6 +412,8 @@ export default function App() {
   const [odBusy, setOdBusy] = useState(false);
   const [odMsg, setOdMsg] = useState(null);
   const [chartMode, setChartMode] = useState("monthly");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [theme, setTheme] = useState(() => localStorage.getItem("edp_theme") || "dark");
   const C = THEMES[theme];
   const PC = { ponta: C.ponta, cheias: C.cheias, vazio: C.vazio };
@@ -511,6 +530,26 @@ export default function App() {
   const avgMo = monthly.length ? { cost: totals.cost/monthly.length, kwh: totals.kwh/monthly.length } : { cost: 0, kwh: 0 };
   const weekly = useMemo(() => aggregateWeekly(events, rates), [events, rates]);
   const chartData = chartMode === "monthly" ? monthly : weekly;
+
+  const periodResult = useMemo(() => {
+    if (!dateFrom || !dateTo || !events.length) return null;
+    const from = new Date(dateFrom + "T00:00:00");
+    const to = new Date(dateTo + "T23:59:59");
+    if (isNaN(from) || isNaN(to) || from > to) return null;
+    const filtered = events.filter(ev => { const d = new Date(ev.date); return d >= from && d <= to; });
+    if (!filtered.length) return { empty: true };
+    const acc = filtered.reduce((a, ev) => {
+      a.kwh += ev.kwh; a.ponta += ev.ponta; a.cheias += ev.cheias; a.vazio += ev.vazio; a.sessions++;
+      return a;
+    }, { kwh: 0, ponta: 0, cheias: 0, vazio: 0, sessions: 0 });
+    const isSimpl = (rates.tariffType || "tri-horaria") === "simples";
+    const cP = isSimpl ? 0 : acc.ponta * rates.ponta;
+    const cC = isSimpl ? 0 : acc.cheias * rates.cheias;
+    const cV = isSimpl ? 0 : acc.vazio * rates.vazio;
+    const energy = isSimpl ? acc.kwh * (rates.simples || 0.0607) : (cP + cC + cV);
+    const energyIva = energy * (1 + rates.iva);
+    return { ...acc, cP, cC, cV, energy: +energy.toFixed(2), energyIva: +energyIva.toFixed(2), isSimples: isSimpl };
+  }, [dateFrom, dateTo, events, rates]);
 
   if (!ready) return (
     <div style={{ background: C.bg, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -669,6 +708,68 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Period Cost Calculator */}
+              <div className="cd" style={{ marginBottom: 16 }}>
+                <h3 style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>Cálculo por Período</h3>
+                <p style={{ fontSize: 13, color: C.txtD, marginBottom: 14, lineHeight: 1.5 }}>
+                  Custo exato num intervalo de datas — útil para reembolso entre faturas de mês a mês.
+                </p>
+                <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 14 }}>
+                  {[{ l: "De", val: dateFrom, fn: setDateFrom }, { l: "Até", val: dateTo, fn: setDateTo }].map(f => (
+                    <div key={f.l}>
+                      <label style={{ fontSize: 12, color: C.txtM, display: "block", marginBottom: 4, fontWeight: 500 }}>{f.l}</label>
+                      <input type="date" className="inp" style={{ width: 165 }} value={f.val} onChange={e => f.fn(e.target.value)} />
+                    </div>
+                  ))}
+                  {(dateFrom || dateTo) && (
+                    <button className="b bs" onClick={() => { setDateFrom(""); setDateTo(""); }}>Limpar</button>
+                  )}
+                </div>
+                {dateFrom && dateTo && !periodResult && (
+                  <div style={{ fontSize: 13, color: C.txtM, padding: "10px 14px", background: C.bg2, borderRadius: 8 }}>
+                    Datas inválidas ou sem dados.
+                  </div>
+                )}
+                {periodResult?.empty && (
+                  <div style={{ fontSize: 13, color: C.txtM, padding: "10px 14px", background: C.bg2, borderRadius: 8 }}>
+                    Nenhuma sessão encontrada neste período.
+                  </div>
+                )}
+                {periodResult && !periodResult.empty && (
+                  <div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, marginBottom: 12 }}>
+                      {[
+                        { l: "Sessões", v: `${periodResult.sessions}`, c: C.accent },
+                        { l: "Total kWh", v: `${periodResult.kwh.toFixed(1)} kWh`, c: C.txt },
+                        { l: "Energia s/ IVA", v: `€${periodResult.energy.toFixed(2)}`, c: C.txt },
+                        { l: `IVA (${(rates.iva*100).toFixed(0)}%)`, v: `€${(periodResult.energyIva - periodResult.energy).toFixed(2)}`, c: C.txtD },
+                        { l: "Total c/ IVA", v: `€${periodResult.energyIva.toFixed(2)}`, c: C.accent, bold: true },
+                        { l: "Média / sessão", v: `€${(periodResult.energyIva / periodResult.sessions).toFixed(2)}`, c: C.txt },
+                      ].map(r => (
+                        <div key={r.l} style={{ background: C.bg2, padding: 12, borderRadius: 10, border: `1px solid ${r.bold ? C.accent+"44" : C.brd}` }}>
+                          <div style={{ fontSize: 11, color: C.txtM }}>{r.l}</div>
+                          <div className="mo" style={{ fontWeight: r.bold ? 700 : 600, fontSize: r.bold ? 18 : 15, color: r.c, marginTop: 2 }}>{r.v}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {!periodResult.isSimples && (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                        {["ponta","cheias","vazio"].map(p => (
+                          <div key={p} style={{ background: C.bg2, padding: 10, borderRadius: 8, border: `1px solid ${C.brd}` }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                              <div style={{ width: 8, height: 8, borderRadius: 2, background: PC[p] }} />
+                              <span style={{ fontSize: 12, fontWeight: 600 }}>{PL[p]}</span>
+                            </div>
+                            <div className="mo" style={{ fontSize: 14, fontWeight: 600 }}>{periodResult[p].toFixed(1)} kWh</div>
+                            <div className="mo" style={{ color: PC[p], fontSize: 13 }}>€{periodResult[`c${p.charAt(0).toUpperCase()}`].toFixed(2)}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Latest month detail */}
               {latest && (
                 <div className="cd">
@@ -679,14 +780,17 @@ export default function App() {
                   </h3>
                   <div className="grid-periods" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 14 }}>
                     {["ponta","cheias","vazio"].map(p => {
-                      const kwh = latest[p], cost = latest[`c${p.charAt(0).toUpperCase()}`];
+                      const kwh = latest[p];
+                      const isSimpl = (rates.tariffType || "tri-horaria") === "simples";
+                      const rateVal = isSimpl ? (rates.simples || 0.0607) : rates[p];
+                      const cost = isSimpl ? kwh * rateVal : latest[`c${p.charAt(0).toUpperCase()}`];
                       const pct = latest.kwh > 0 ? kwh/latest.kwh*100 : 0;
                       return (
                         <div key={p} style={{ background: C.bg2, padding: 18, borderRadius: 12, border: `1px solid ${C.brd}` }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
                             <div style={{ width: 10, height: 10, borderRadius: 3, background: PC[p] }} />
                             <span style={{ fontWeight: 600, fontSize: 14 }}>{PL[p]}</span>
-                            <span className="tg mo" style={{ background: `${PC[p]}18`, color: PC[p], marginLeft: "auto" }}>€{rates[p].toFixed(4)}/kWh</span>
+                            <span className="tg mo" style={{ background: `${PC[p]}18`, color: PC[p], marginLeft: "auto" }}>€{rateVal.toFixed(4)}/kWh</span>
                           </div>
                           <div className="mo" style={{ fontSize: 22, fontWeight: 700 }}>{kwh.toFixed(1)} <span style={{ fontSize: 13, color: C.txtD, fontWeight: 400 }}>kWh</span></div>
                           <div className="mo" style={{ color: PC[p], fontSize: 16, fontWeight: 600, marginTop: 3 }}>€{cost.toFixed(2)}</div>
@@ -743,7 +847,8 @@ export default function App() {
                     <tbody>
                       {[...events].reverse().map(ev => {
                         const d = new Date(ev.date);
-                        const cost = (ev.ponta*rates.ponta + ev.cheias*rates.cheias + ev.vazio*rates.vazio) * (1+rates.iva);
+                        const isSimpl = (rates.tariffType || "tri-horaria") === "simples";
+                        const cost = (isSimpl ? ev.kwh * (rates.simples || 0.0607) : ev.ponta*rates.ponta + ev.cheias*rates.cheias + ev.vazio*rates.vazio) * (1+rates.iva);
                         const dom = ev.ponta >= ev.cheias && ev.ponta >= ev.vazio ? "ponta" : ev.cheias >= ev.vazio ? "cheias" : "vazio";
                         return (
                           <tr key={ev.id} style={{ borderBottom: `1px solid ${C.brd}08` }}>
@@ -887,7 +992,7 @@ export default function App() {
           <div className="su" style={{ maxWidth: 640, margin: "0 auto" }}>
             <h2 style={{ fontWeight: 700, fontSize: 20, marginBottom: 6 }}>Tarifas EDP</h2>
             <p style={{ color: C.txtD, fontSize: 14, marginBottom: 8, lineHeight: 1.6 }}>
-              Tarifas de acesso às redes (ERSE) para Tri-Horária — 10,35 kW. Ajuste conforme o seu contrato.
+              Tarifas de acesso às redes (ERSE) — 10,35 kVA. Ajuste conforme o seu contrato.
             </p>
             <p style={{ fontSize: 12, color: C.txtM, marginBottom: 20 }}>
               Fonte:{" "}
@@ -898,10 +1003,40 @@ export default function App() {
               </a>
             </p>
 
+            {/* Tariff type selector */}
+            <div className="cd" style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 11, color: C.txtM, fontWeight: 600, textTransform: "uppercase", letterSpacing: .6, marginBottom: 10 }}>Tipo de Tarifa</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {[
+                  { id: "tri-horaria", l: "Tri-Horária", s: "Ponta · Cheias · Vazio" },
+                  { id: "simples", l: "Tarifa Simples", s: "Preço único por kWh" },
+                ].map(t => {
+                  const active = (rates.tariffType || "tri-horaria") === t.id;
+                  return (
+                    <button key={t.id}
+                      className={`b ${active ? "bp" : ""}`}
+                      style={{ flex: 1, flexDirection: "column", alignItems: "flex-start", gap: 2, padding: "10px 14px" }}
+                      onClick={() => {
+                        if (!active) {
+                          const base = t.id === "simples" ? DEF_RATES_SIMPLES : DEF_RATES;
+                          saveR({ ...rates, tariffType: t.id, potenciaDia: base.potenciaDia, lastUpdated: new Date().toISOString().slice(0,10) });
+                          setEditR(null);
+                        }
+                      }}>
+                      <div style={{ fontWeight: 600, fontSize: 13 }}>{t.l}</div>
+                      <div style={{ fontSize: 11, opacity: .75 }}>{t.s}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className="cd" style={{ marginBottom: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>{rates.label}</div>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>
+                    {(rates.tariffType || "tri-horaria") === "simples" ? "EDP Tarifa Simples (10,35 kVA)" : rates.label}
+                  </div>
                   <div style={{ fontSize: 11, color: C.txtM }}>Atualização: {rates.lastUpdated}</div>
                 </div>
                 {!editR && <button className="b bs bp" onClick={() => setEditR({...rates})}>Editar</button>}
@@ -909,10 +1044,26 @@ export default function App() {
 
               {editR ? (
                 <div>
+                  {(editR.tariffType || "tri-horaria") === "simples" ? (
+                    <div style={{ marginBottom: 11 }}>
+                      <label style={{ fontSize: 12, color: C.accent, fontWeight: 500, marginBottom: 4, display: "block" }}>Tarifa Simples (€/kWh)</label>
+                      <input className="inp" type="number" step="0.0001" value={editR.simples ?? 0.0607}
+                        onChange={e => setEditR({...editR, simples: parseFloat(e.target.value)||0})} />
+                    </div>
+                  ) : (
+                    [
+                      { k: "ponta", l: "Ponta (€/kWh)", c: C.ponta },
+                      { k: "cheias", l: "Cheias (€/kWh)", c: C.cheias },
+                      { k: "vazio", l: "Vazio (€/kWh)", c: C.vazio },
+                    ].map(f => (
+                      <div key={f.k} style={{ marginBottom: 11 }}>
+                        <label style={{ fontSize: 12, color: f.c, fontWeight: 500, marginBottom: 4, display: "block" }}>{f.l}</label>
+                        <input className="inp" type="number" step="0.0001" value={editR[f.k]}
+                          onChange={e => setEditR({...editR, [f.k]: parseFloat(e.target.value)||0})} />
+                      </div>
+                    ))
+                  )}
                   {[
-                    { k: "ponta", l: "Ponta (€/kWh)", c: C.ponta },
-                    { k: "cheias", l: "Cheias (€/kWh)", c: C.cheias },
-                    { k: "vazio", l: "Vazio (€/kWh)", c: C.vazio },
                     { k: "potenciaDia", l: "Potência contratada (€/dia)", c: C.accent },
                     { k: "iva", l: "IVA (decimal — 0.06 = 6%)", c: C.txtD },
                   ].map(f => (
@@ -925,20 +1076,28 @@ export default function App() {
                   <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
                     <button className="b bs bp" onClick={() => { saveR({...editR, lastUpdated: new Date().toISOString().slice(0,10)}); setEditR(null); }}>Guardar</button>
                     <button className="b bs" onClick={() => setEditR(null)}>Cancelar</button>
-                    <button className="b bs bd" onClick={() => setEditR({...DEF_RATES})}>Repor padrão</button>
+                    <button className="b bs bd" onClick={() => setEditR({ ...(rates.tariffType === "simples" ? DEF_RATES_SIMPLES : DEF_RATES) })}>Repor padrão</button>
                   </div>
                 </div>
               ) : (
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10 }}>
-                  {["ponta","cheias","vazio"].map(p => (
-                    <div key={p} style={{ background: C.bg2, padding: 16, borderRadius: 12, border: `1px solid ${C.brd}`, textAlign: "center" }}>
-                      <div style={{ width: 12, height: 12, borderRadius: 4, background: PC[p], margin: "0 auto 8px" }} />
-                      <div style={{ fontSize: 12, color: C.txtD }}>{PL[p]}</div>
-                      <div className="mo" style={{ fontWeight: 700, fontSize: 21, color: PC[p], marginTop: 4 }}>€{rates[p].toFixed(4)}</div>
-                      <div style={{ fontSize: 11, color: C.txtM }}>por kWh</div>
-                    </div>
-                  ))}
-                </div>
+                (rates.tariffType || "tri-horaria") === "simples" ? (
+                  <div style={{ textAlign: "center", padding: "10px 0" }}>
+                    <div style={{ fontSize: 12, color: C.txtD, marginBottom: 4 }}>Energia (todos os períodos)</div>
+                    <div className="mo" style={{ fontWeight: 700, fontSize: 32, color: C.accent }}>€{(rates.simples || 0.0607).toFixed(4)}</div>
+                    <div style={{ fontSize: 12, color: C.txtM, marginTop: 2 }}>por kWh</div>
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10 }}>
+                    {["ponta","cheias","vazio"].map(p => (
+                      <div key={p} style={{ background: C.bg2, padding: 16, borderRadius: 12, border: `1px solid ${C.brd}`, textAlign: "center" }}>
+                        <div style={{ width: 12, height: 12, borderRadius: 4, background: PC[p], margin: "0 auto 8px" }} />
+                        <div style={{ fontSize: 12, color: C.txtD }}>{PL[p]}</div>
+                        <div className="mo" style={{ fontWeight: 700, fontSize: 21, color: PC[p], marginTop: 4 }}>€{rates[p].toFixed(4)}</div>
+                        <div style={{ fontSize: 11, color: C.txtM }}>por kWh</div>
+                      </div>
+                    ))}
+                  </div>
+                )
               )}
             </div>
 
