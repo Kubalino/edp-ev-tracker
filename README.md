@@ -1,8 +1,6 @@
 # ⚡ EDP EV Charging Tracker
 
-A browser-based dashboard to track EV charging costs using EDP's **tri-horária** tariff (Vazio / Cheias / Ponta) in Portugal.
-
-![Dashboard Preview](docs/screenshot.png)
+A browser-based dashboard to track EV charging costs using EDP's tariffs in Portugal — supports both **Tri-Horária** (Vazio / Cheias / Ponta) and **Tarifa Simples** (flat rate).
 
 ## Features
 
@@ -13,11 +11,13 @@ A browser-based dashboard to track EV charging costs using EDP's **tri-horária*
   - Weekday vs weekend (no Ponta on weekends)
   - Winter vs Summer schedules
   - Sessions spanning multiple periods (proportional split)
-- **Cost Calculation** — Per-session and monthly energy costs with IVA
+- **Tariff Type Selection** — Switch between **Tri-Horária** and **Tarifa Simples** (flat €/kWh rate); all calculations update instantly
+- **Cost Calculation** — Per-session and monthly energy costs with IVA, for whichever tariff type is active
+- **Period Cost Calculator** — Pick a custom date range ("De" / "Até") to get the exact cost for any invoice period — useful for splitting costs between housemates
 - **Dashboard** — Monthly cost trends, cost by period, kWh breakdown, per-session averages
 - **Persistent Storage** — IndexedDB stores all data locally in your browser
 - **Backup/Restore** — Export & import JSON backups, CSV exports
-- **Rate Management** — Pre-loaded EDP 2026 rates with manual override
+- **Rate Management** — Pre-loaded EDP 2026 ERSE rates with manual override
 - **Duplicate Detection** — Re-importing the same CSV won't create duplicate entries
 
 ## CSV Format
@@ -86,6 +86,9 @@ npm run dev
 npm run build
 ```
 
+> **Windows / PowerShell note:** If `npm` is not in your PATH, use the full path:
+> `& "C:\Program Files\nodejs\npm.cmd" run dev`
+
 ## Tech Stack
 
 - **React 18** + Vite
@@ -94,20 +97,45 @@ npm run build
 - **@azure/msal-browser** — Microsoft authentication for OneDrive sync
 - **GitHub Actions** — Automated deployment to GitHub Pages
 
-## Pre-loaded Rates (2026 estimate)
+## Pre-loaded Rates (ERSE 2026, 10,35 kVA)
 
+### Tri-Horária
 | Period | €/kWh |
 |--------|-------|
-| Ponta | 0.3250 |
-| Cheias | 0.1729 |
-| Vazio | 0.1045 |
+| Ponta | 0.2452 |
+| Cheias | 0.0412 |
+| Vazio | 0.0158 |
+| Potência | €0.3819/dia |
 
-> These are approximate values for EDP Eletricidade Verde, 6.9 kVA.
-> Update them in the Tarifas tab to match your actual contract.
+### Tarifa Simples
+| | |
+|-|-|
+| Energia (flat, sem IVA) | €0.228/kWh |
+| Energia (flat, com IVA) | ~€0.280/kWh |
+| Potência | €0.5154/dia |
+
+IVA: 23% (standard Portuguese electricity rate). Source: [EDP Tarifas de Acesso às Redes, Dez 2025](https://helpcenter.edp.pt/media/hswmizya/20251222_tarifas_acesso_redes.pdf)
+
+> Update rates in the **Tarifas tab** to match your actual contract.
 
 ## Data Privacy
 
 Charging data is stored **locally in your browser** using IndexedDB. The only external communication is the OneDrive sync feature, which reads your CSV directly from your own Microsoft account — no third-party servers involved. Use the backup/restore feature to move data between devices.
+
+## Changelog
+
+### v1.2.0 — 2026-05-08
+- **Tarifa Simples support** — New tariff type selector in the Tarifas tab. Switch between Tri-Horária and Tarifa Simples (flat €0.228/kWh before tax, ~€0.280/kWh with 23% IVA, verified against real invoices for 10,35 kVA). All dashboard calculations, charts and session costs update instantly based on the active tariff type.
+- **Period Cost Calculator** — New section in the Dashboard tab. Pick any "De" / "Até" date range to get the exact total cost (with IVA breakdown and per-session average) for that period. Useful for splitting electricity costs between housemates when invoices span mid-month periods.
+
+### v1.1.0
+- OneDrive sync via Microsoft Graph API
+- Dark/light theme toggle
+- Weekly chart view alongside monthly
+- Backup/restore JSON export
+
+### v1.0.0
+- Initial release: CSV import, Tri-Horária period classification, IndexedDB persistence, monthly dashboard
 
 ## License
 
