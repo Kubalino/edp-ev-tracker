@@ -166,8 +166,16 @@ function classifyEvent(startDate, durMin, kWh) {
 function parseCSV(text) {
   const lines = text.trim().split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) throw new Error("CSV needs headers + at least 1 data row");
-  const sep = lines[0].includes(";") ? ";" : ",";
-  const hdr = lines[0].split(sep).map(h => h.trim().toLowerCase().replace(/[""]/g, "").replace(/:$/,""));
+  // Newer charger exports prepend metadata rows (Device ID, Firmware Version)
+  // before the real header — find the first line that looks like an events header.
+  const splitHdr = (l, s) => l.split(s).map(h => h.trim().toLowerCase().replace(/[""]/g, "").replace(/:$/,""));
+  let hi = 0;
+  for (let i = 0; i < Math.min(lines.length - 1, 10); i++) {
+    const s = lines[i].includes(";") ? ";" : ",";
+    if (detectFmt(splitHdr(lines[i], s))?.type === "events") { hi = i; break; }
+  }
+  const sep = lines[hi].includes(";") ? ";" : ",";
+  const hdr = splitHdr(lines[hi], sep);
   const fmt = detectFmt(hdr);
   if (!fmt) throw new Error(
     "Unrecognized CSV format.\n\nExpected either:\n" +
@@ -175,7 +183,7 @@ function parseCSV(text) {
     "• Monthly rows: Mês, kWh Vazio, kWh Cheias, kWh Ponta"
   );
   const evts = [];
-  for (let i = 1; i < lines.length; i++) {
+  for (let i = hi + 1; i < lines.length; i++) {
     const v = lines[i].split(sep).map(s => s.trim().replace(/[""]/g, ""));
     if (v.length < hdr.length) continue;
     try {
@@ -888,8 +896,10 @@ export default function App() {
               <h3 style={{ fontWeight: 600, fontSize: 14, color: C.accent, marginBottom: 10 }}>Formatos aceites</h3>
               <div className="mo" style={{ background: C.bg2, borderRadius: 10, padding: 16, fontSize: 12, color: C.txtD, lineHeight: 1.9, overflowX: "auto" }}>
                 <div style={{ color: C.vazio, fontWeight: 600 }}>▸ Sessões do carregador (o seu formato):</div>
-                Time,Start:,End:,Duration:,Charged:(kWh)<br/>
-                2026-03-06 10:46:18,10:46,11:39,00:52:56,2.2<br/><br/>
+                Device ID,…<br/>
+                Firmware Version,…<br/>
+                Name,Time,Start:,End:,Duration:,Charged:(kWh)<br/>
+                Unnamed,2026-03-06 10:46:18,10:46,11:39,00:52:56,2.2<br/><br/>
                 <div style={{ color: C.cheias, fontWeight: 600 }}>▸ Mensal (agregado):</div>
                 Mês;kWh Vazio;kWh Cheias;kWh Ponta<br/>
                 2025-01;180.5;120.3;45.2
